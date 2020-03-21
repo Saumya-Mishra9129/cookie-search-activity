@@ -1,3 +1,4 @@
+from builtins import str
 # Copyright (c) 2011 Walter Bender
 
 # This program is free software; you can redistribute it and/or modify
@@ -11,6 +12,8 @@
 
 import gi
 gi.require_version('Gtk', '3.0')
+gi.require_version('TelepathyGLib', '0.12')
+
 from gi.repository import Gtk, Gdk
 
 from sugar3.activity import activity
@@ -22,21 +25,22 @@ from sugar3.activity.widgets import StopButton
 from toolbar_utils import button_factory, label_factory, separator_factory
 from utils import json_load, json_dump, convert_seconds_to_minutes
 
-import telepathy
+from gi.repository import TelepathyGLib
 import dbus
 from dbus.service import signal
-from dbus.gobject_service import ExportedGObject
+from dbus.gi_service import ExportedGObject
 from sugar3.presence import presenceservice
 from sugar3.presence.tubeconn import TubeConnection
 
 from gettext import gettext as _
 
 import json
-from json import load as jload
+from json import load as jloadT
 from json import dump as jdump
-from StringIO import StringIO
+from io import StringIO
 
 from game import Game
+PATH = '/org/sugarlabs/CookieSearchActivity'
 
 import logging
 _logger = logging.getLogger('cookie-search-activity')
@@ -173,7 +177,7 @@ class SearchActivity(activity.Activity):
 
     def _data_loader(self, data):
         io = StringIO(data)
-        return jload(io)
+        return jloadT(io)
 
     def _write_scores_to_clipboard(self, button=None):
         ''' SimpleGraph will plot the cululative results '''
@@ -218,16 +222,16 @@ class SearchActivity(activity.Activity):
         self.tubes_chan = self._shared_activity.telepathy_tubes_chan
         self.text_chan = self._shared_activity.telepathy_text_chan
 
-        self.tubes_chan[telepathy.CHANNEL_TYPE_TUBES].connect_to_signal(
+        self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].connect_to_signal(
             'NewTube', self._new_tube_cb)
 
         if sharer:
             _logger.debug('This is my activity: making a tube...')
-            id = self.tubes_chan[telepathy.CHANNEL_TYPE_TUBES].OfferDBusTube(
+            id = self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].OfferDBusTube(
                 SERVICE, {})
         else:
             _logger.debug('I am joining an activity: waiting for a tube...')
-            self.tubes_chan[telepathy.CHANNEL_TYPE_TUBES].ListTubes(
+            self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].ListTubes(
                 reply_handler=self._list_tubes_reply_cb,
                 error_handler=self._list_tubes_error_cb)
         self._game.set_sharing(True)
@@ -246,16 +250,16 @@ class SearchActivity(activity.Activity):
         _logger.debug('New tube: ID=%d initator=%d type=%d service=%s \
 params=%r state=%d' % (id, initiator, type, service, params, state))
 
-        if (type == telepathy.TUBE_TYPE_DBUS and service == SERVICE):
-            if state == telepathy.TUBE_STATE_LOCAL_PENDING:
+        if (type == TelepathyGLib.TubeType.DBUS and service == SERVICE):
+            if state == TelepathyGLib.TubeState.LOCAL_PENDING:
                 self.tubes_chan[
-                    telepathy.CHANNEL_TYPE_TUBES].AcceptDBusTube(id)
+                    TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].AcceptDBusTube(id)
 
             tube_conn = TubeConnection(
                 self.conn, self.tubes_chan[
-                    telepathy.CHANNEL_TYPE_TUBES], id,
+                    TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES], id,
                 group_iface=self.text_chan[
-                    telepathy.CHANNEL_INTERFACE_GROUP])
+                    TelepathyGLib.IFACE_CHANNEL_INTERFACE_GROUP])
 
             self.chattube = ChatTube(tube_conn, self.initiating,
                                      self.event_received_cb)
