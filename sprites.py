@@ -75,8 +75,6 @@ def svg_str_to_pixbuf(svg_string):
     return pixbuf
 
 '''
-from __future__ import division
-from __future__ import print_function
 from builtins import str
 from builtins import range
 from past.utils import old_div

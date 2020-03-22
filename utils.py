@@ -1,5 +1,3 @@
-from future import standard_library
-standard_library.install_aliases()
 # Copyright (c) 2011 Walter Bender
 
 # This program is free software; you can redistribute it and/or modify
