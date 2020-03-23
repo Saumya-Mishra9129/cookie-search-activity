@@ -9,7 +9,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this library; if not, write to the Free Software
 # Foundation, 51 Franklin Street, Suite 500 Boston, MA 02110-1335 USA
-from builtins import object
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib, GdkPixbuf, Gdk
@@ -39,7 +38,7 @@ PATHS = [False, 'turtle-monster.jpg', 'cookie.jpg', 'cookie.jpg',
          'bitten-cookie.jpg']
 
 
-class Game(object):
+class Game:
 
     def __init__(self, canvas, parent=None, path=None,
                  colors=['#A0FFA0', '#FF8080']):
