@@ -9,11 +9,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this library; if not, write to the Free Software
 # Foundation, 51 Franklin Street, Suite 500 Boston, MA 02110-1335 USA
-from builtins import map
-from builtins import str
-from builtins import range
 from builtins import object
-from past.utils import old_div
+import gi
+gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib, GdkPixbuf, Gdk
 import cairo
 import os
@@ -71,11 +69,11 @@ class Game(object):
             self.portrait = False
             self.grid_height = SEVEN
             self.grid_width = TEN
-        self._scale = min(old_div(self._width, (self.grid_width * DOT_SIZE * 1.2)),
-                          old_div(self._height, (self.grid_height * DOT_SIZE * 1.2)))
+        self._scale = min(self._width // (self.grid_width * DOT_SIZE * 1.2),
+                          self._height // (self.grid_height * DOT_SIZE * 1.2))
 
         self._dot_size = int(DOT_SIZE * self._scale)
-        self._space = int(old_div(self._dot_size, 5.))
+        self._space = int(self._dot_size // 5.)
         self.we_are_sharing = False
 
         # '-1' Workaround for showing 'second 0'
@@ -89,8 +87,8 @@ class Game(object):
         self._dots = []
         for y in range(self.grid_height):
             for x in range(self.grid_width):
-                xoffset = int(old_div((self._width - self.grid_width * self._dot_size -
-                               (self.grid_width - 1) * self._space), 2.))
+                xoffset = int((self._width - self.grid_width * self._dot_size -
+                               (self.grid_width - 1) * self._space) // 2.)
                 self._dots.append(
                     Sprite(self._sprites,
                            xoffset + x * (self._dot_size + self._space),
@@ -121,8 +119,8 @@ class Game(object):
         i = 0
         for y in range(self.grid_height):
             for x in range(self.grid_width):
-                xoffset = int(old_div((self._width - self.grid_width * self._dot_size -
-                               (self.grid_width - 1) * self._space), 2.))
+                xoffset = int((self._width - self.grid_width * self._dot_size -
+                               (self.grid_width - 1) * self._space) // 2.)
                 self._dots[i].move(
                     (xoffset + x * (self._dot_size + self._space),
                      y * (self._dot_size + self._space)))
@@ -342,7 +340,7 @@ class Game(object):
 
     def _dot_to_grid(self, dot):
         ''' calculate the grid column and row for a dot '''
-        return [dot % self.grid_width, int(old_div(dot, self.grid_width))]
+        return [dot % self.grid_width, int(dot // self.grid_width)]
 
     def _new_game_alert(self):
         alert = Alert()
@@ -396,8 +394,8 @@ class Game(object):
             if PATHS[i] is False:
                 pixbuf = svg_str_to_pixbuf(
                     self._header() +
-                    self._circle(old_div(self._dot_size, 2.), old_div(self._dot_size, 2.),
-                                 old_div(self._dot_size, 2.)) +
+                    self._circle(self._dot_size // 2., self._dot_size // 2.,
+                                 self._dot_size // 2.) +
                     self._footer())
             else:
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(

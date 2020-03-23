@@ -1,4 +1,3 @@
-from builtins import str
 # Copyright (c) 2011 Walter Bender
 
 # This program is free software; you can redistribute it and/or modify
@@ -9,7 +8,6 @@ from builtins import str
 # You should have received a copy of the GNU General Public License
 # along with this library; if not, write to the Free Software
 # Foundation, 51 Franklin Street, Suite 500 Boston, MA 02110-1335 USA
-
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('TelepathyGLib', '0.12')
@@ -35,7 +33,7 @@ from sugar3.presence.tubeconn import TubeConnection
 from gettext import gettext as _
 
 import json
-from json import load as jloadT
+from json import load as jload
 from json import dump as jdump
 from io import StringIO
 
@@ -177,7 +175,7 @@ class SearchActivity(activity.Activity):
 
     def _data_loader(self, data):
         io = StringIO(data)
-        return jloadT(io)
+        return jload(io)
 
     def _write_scores_to_clipboard(self, button=None):
         ''' SimpleGraph will plot the cululative results '''
