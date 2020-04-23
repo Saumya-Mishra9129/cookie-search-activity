@@ -178,6 +178,10 @@ class Game:
 
         self._counter()
 
+    def copy_game(self):
+        return self.game
+
+
     def save_game(self):
         ''' Return dot list for saving to Journal or
         sharing '''

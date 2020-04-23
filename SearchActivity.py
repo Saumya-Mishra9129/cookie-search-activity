@@ -171,6 +171,10 @@ class SearchActivity(activity.Activity):
         self._game.set_sharing(True)
         self._restoring = True
 
+    def _new_game_cb(self, button=None):
+        ''' Start a new game. '''
+        self._game.new_game()
+
     def _message_cb(self, collab, buddy, msg):
         ''' Data from a tube has arrived. '''
         command = msg.get("command")
@@ -184,7 +188,14 @@ class SearchActivity(activity.Activity):
     def send_nick(self):
         _logger.debug('send_nick')
         self.send_event("N", self.nick)
-        self.send_event("C", "%s,%s" % (self.colors[0], self.colors[1]))
+
+    def send_restore(self):
+        ''' Send a new game to joiner. '''
+        if not self.collab.props.leader:
+            return
+        _logger.debug('send_restore')
+        self.send_event("r", self._game.copy_game())
+
 
 
     def write_file(self, file_path):
@@ -244,18 +255,44 @@ class SearchActivity(activity.Activity):
             scores += '%s: %s\n' % (str(i + 1), s)
         Gtk.Clipboard().set_text(scores)
 
+    def _receive_join(self, payload):
+        _logger.debug('received_join %s' % (payload))
+        if self.collab.props.leader:
+            self.send_new_game()
+            _logger.debug(self.metadata['dotlist'])
+            if self.metadata['dotlist'] is not None:
+                self.send_restore()
+
+    def _receive_nick(self, payload):
+        _logger.debug('received_nick %s' % (payload))
+        self.buddy = payload
+        self.opponent.set_label(self.buddy)
+        if self.collab.props.leader:
+            self.send_nick()
+
+    def _receive_restore(self, payload):
+        ''' Get game state from sharer. '''
+        if self.collab.props.leader:
+            return
+        _logger.debug('received_restore %s' % (payload))
+        self._game.restore_game(json_load(payload))
+
 
     def _setup_dispatch_table(self):
         ''' Associate tokens with commands. '''
         self._processing_methods = {
             'n': [self._receive_new_game, 'get a new game grid'],
             'p': [self._receive_dot_click, 'get a dot click'],
+            'N': [self._receive_nick, 'receive nick from opponent'],
+            'j': [self._receive_join, 'receive new joiner'],
+            'r': [self._receive_restore, 'restore game state'],
         }
 
-    def send_event(self, payload):
+    def send_event(self, command,payload):
         ''' Send event through the tube. '''
         if hasattr(self, 'collab') and self.collab is not None:
             self.collab.post(dict(
+                command=command,
                 payload=payload
             ))
 
