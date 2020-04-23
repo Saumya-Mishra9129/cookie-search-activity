@@ -37,6 +37,11 @@ from json import load as jload
 from json import dump as jdump
 from io import StringIO
 
+try:
+    from sugar3.presence.wrapper import CollabWrapper
+except (ImportError, ModuleNotFoundError):
+    from textchannelwrapper import CollabWrapper
+
 from game import Game
 PATH = '/org/sugarlabs/CookieSearchActivity'
 
@@ -60,12 +65,14 @@ class SearchActivity(activity.Activity):
 
         self.path = activity.get_bundle_path()
         self.all_scores = []
-
+        self._restoring = True
         self.nick = profile.get_nick_name()
         if profile.get_color() is not None:
             self.colors = profile.get_color().to_string().split(',')
         else:
             self.colors = ['#A0FFA0', '#FF8080']
+        self.buddy = None
+        self.opponent_colors = None
 
         self._setup_toolbars()
         self._setup_dispatch_table()
@@ -81,30 +88,31 @@ class SearchActivity(activity.Activity):
         self._game = Game(canvas, parent=self, path=self.path,
                           colors=self.colors)
 
-        # activity sharing
-        self.participants = {}
-        self.joined = False
-
         self.connect('shared', self._shared_cb)
+        self.connect('joined', self._joined_cb)
+        self._restoring = False
 
-        if self.shared_activity:
-            # we are joining the activity
-            _logger.debug('We are joining an activity')
+        self.collab = CollabWrapper(self)
+        self.collab.connect('message', self._message_cb)
+        self.collab.connect('joined', self._joined_cb)
+        self.collab.setup()
 
-            self.connect('joined', self._joined_cb)
-            self.shared_activity.connect('buddy-joined',
-                                         self._buddy_joined_cb)
-            self.shared_activity.connect('buddy-left', self._buddy_left_cb)
-            if self.get_shared():
-                self._joined_cb(self)
-        else:
-            # we are creating the activity
-            _logger.debug("We are creating an activity")
+        # Send the nick to our opponent
+        if not self.collab.props.leader:
+            self.send_nick()
+            # And let the sharer know we've joined
+            self.send_join()
 
         if 'dotlist' in self.metadata:
             self._restore()
         else:
             self._game.new_game()
+
+    def set_data(self, data):
+        pass
+
+    def get_data(self):
+        return None
 
     def _setup_toolbars(self):
         """ Setup the toolbars. """
@@ -143,9 +151,41 @@ class SearchActivity(activity.Activity):
         toolbox.toolbar.insert(stop_button, -1)
         stop_button.show()
 
-    def _new_game_cb(self, button=None):
-        ''' Start a new game. '''
-        self._game.new_game()
+
+    # Collaboration-related methods
+
+    def _shared_cb(self, activity):
+        ''' Either set up initial share...'''
+        _logger.debug('shared')
+        self.after_share_join(True)
+
+    def _joined_cb(self, activity):
+        ''' ...or join an exisiting share. '''
+        _logger.debug('joined')
+        self.after_share_join(False)
+        self.send_nick()
+        # And let the sharer know we've joined
+        self.send_join()
+
+    def after_share_join(self, sharer):
+        self._game.set_sharing(True)
+        self._restoring = True
+
+    def _message_cb(self, collab, buddy, msg):
+        ''' Data from a tube has arrived. '''
+        command = msg.get("command")
+        payload = msg.get("payload")
+        self._processing_methods[command][0](payload)
+
+    def send_join(self):
+        _logger.debug('send_join')
+        self.send_event("j", self.nick)
+
+    def send_nick(self):
+        _logger.debug('send_nick')
+        self.send_event("N", self.nick)
+        self.send_event("C", "%s,%s" % (self.colors[0], self.colors[1]))
+
 
     def write_file(self, file_path):
         """ Write the grid status to the Journal """
@@ -204,98 +244,6 @@ class SearchActivity(activity.Activity):
             scores += '%s: %s\n' % (str(i + 1), s)
         Gtk.Clipboard().set_text(scores)
 
-    def _shared_cb(self, activity):
-        _logger.debug('Game Shared')
-        self._sharing_setup()
-
-        self.shared_activity.connect('buddy-joined', self._buddy_joined_cb)
-        self.shared_activity.connect('buddy-left', self._buddy_left_cb)
-        self.send_new_game()
-        channel = self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES]
-        _logger.debug('This is my activity: offering a tube...')
-        id = channel.OfferDBusTube(SERVICE, {})
-        _logger.debug('Tube address: %s', channel.GetDBusTubeAddress(id))
-
-    def _sharing_setup(self):
-        _logger.debug("_sharing_setup()")
-
-        if self.shared_activity is None:
-            _logger.error('Failed to share or join activity')
-            return
-
-        self.conn = self.shared_activity.telepathy_conn
-        self.tubes_chan = self.shared_activity.telepathy_tubes_chan
-        self.text_chan = self.shared_activity.telepathy_text_chan
-        self.tube_id = None
-        self.tubes_chan[
-            TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].connect_to_signal(
-            'NewTube', self._new_tube_cb)
-
-    def _list_tubes_reply_cb(self, tubes):
-        for tube_info in tubes:
-            self._new_tube_cb(*tube_info)
-
-    def _list_tubes_error_cb(self, e):
-        _logger.error('ListTubes() failed: %s', e)
-
-    def _joined_cb(self, activity):
-        _logger.debug("_joined_cb()")
-        if not self.shared_activity:
-            self._enable_collaboration()
-            return
-
-        self.joined = True
-        _logger.debug('Joined an existing Game session')
-        self._sharing_setup()
-
-        _logger.debug('This is not my activity: waiting for a tube...')
-        self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].ListTubes(
-            reply_handler=self._list_tubes_reply_cb,
-            error_handler=self._list_tubes_error_cb)
-        self._game.set_sharing(True)
-        self._receive_new_game(())
-
-    def _new_tube_cb(self, id, initiator, type, service, params, state):
-        _logger.debug('New tube: ID=%d initiator=%d type=%d service=%s '
-                     'params=%r state=%d', id, initiator, type, service,
-                     params, state)
-
-        if self.tube_id is not None:
-            # We are already using a tube
-            return
-
-        if type != TelepathyGLib.TubeType.DBUS or \
-                service != SERVICE :
-            return
-
-        channel = self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES]
-
-        if state == TelepathyGLib.TubeState.LOCAL_PENDING:
-            channel.AcceptDBusTube(id)
-
-        # look for the initiator's D-Bus unique name
-        initiator_dbus_name = None
-        dbus_names = channel.GetDBusNames(id)
-        for handle, name in dbus_names:
-            if handle == initiator:
-                _logger.debug('found initiator D-Bus name: %s', name)
-                initiator_dbus_name = name
-                break
-
-        if initiator_dbus_name is None:
-            _logger.error('Unable to get the D-Bus name of the tube initiator')
-            return
-
-
-
-    def _buddy_joined_cb(self, activity, buddy):
-        _logger.debug('buddy joined with object path: %s', buddy.object_path())
-
-    def _buddy_left_cb(self, activity, buddy):
-        _logger.debug('buddy left with object path: %s', buddy.object_path())
-
-
-
 
     def _setup_dispatch_table(self):
         ''' Associate tokens with commands. '''
@@ -304,7 +252,12 @@ class SearchActivity(activity.Activity):
             'p': [self._receive_dot_click, 'get a dot click'],
         }
 
-
+    def send_event(self, payload):
+        ''' Send event through the tube. '''
+        if hasattr(self, 'collab') and self.collab is not None:
+            self.collab.post(dict(
+                payload=payload
+            ))
 
     def send_new_game(self):
         ''' Send a new grid to all players '''
