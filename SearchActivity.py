@@ -80,7 +80,26 @@ class SearchActivity(activity.Activity):
 
         self._game = Game(canvas, parent=self, path=self.path,
                           colors=self.colors)
-        self._setup_presence_service()
+
+        # activity sharing
+        self.participants = {}
+        self.joined = False
+
+        self.connect('shared', self._shared_cb)
+
+        if self.shared_activity:
+            # we are joining the activity
+            _logger.debug('We are joining an activity')
+
+            self.connect('joined', self._joined_cb)
+            self.shared_activity.connect('buddy-joined',
+                                         self._buddy_joined_cb)
+            self.shared_activity.connect('buddy-left', self._buddy_left_cb)
+            if self.get_shared():
+                self._joined_cb(self)
+        else:
+            # we are creating the activity
+            _logger.debug("We are creating an activity")
 
         if 'dotlist' in self.metadata:
             self._restore()
@@ -185,82 +204,98 @@ class SearchActivity(activity.Activity):
             scores += '%s: %s\n' % (str(i + 1), s)
         Gtk.Clipboard().set_text(scores)
 
-    # Collaboration-related methods
-
-    def _setup_presence_service(self):
-        """ Setup the Presence Service. """
-        self.pservice = presenceservice.get_instance()
-        self.initiating = None  # sharing (True) or joining (False)
-
-        owner = self.pservice.get_owner()
-        self.owner = owner
-        self._share = ""
-        self.connect('shared', self._shared_cb)
-        self.connect('joined', self._joined_cb)
-
     def _shared_cb(self, activity):
-        """ Either set up initial share..."""
-        self._new_tube_common(True)
+        _logger.debug('Game Shared')
+        self._sharing_setup()
 
-    def _joined_cb(self, activity):
-        """ ...or join an exisiting share. """
-        self._new_tube_common(False)
+        self.shared_activity.connect('buddy-joined', self._buddy_joined_cb)
+        self.shared_activity.connect('buddy-left', self._buddy_left_cb)
+        self.send_new_game()
+        channel = self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES]
+        _logger.debug('This is my activity: offering a tube...')
+        id = channel.OfferDBusTube(SERVICE, {})
+        _logger.debug('Tube address: %s', channel.GetDBusTubeAddress(id))
 
-    def _new_tube_common(self, sharer):
-        """ Joining and sharing are mostly the same... """
-        if self._shared_activity is None:
-            _logger.debug("Error: Failed to share or join activity ... \
-                _shared_activity is null in _shared_cb()")
+    def _sharing_setup(self):
+        _logger.debug("_sharing_setup()")
+
+        if self.shared_activity is None:
+            _logger.error('Failed to share or join activity')
             return
 
-        self.initiating = sharer
-        self.waiting_for_hand = not sharer
-
-        self.conn = self._shared_activity.telepathy_conn
-        self.tubes_chan = self._shared_activity.telepathy_tubes_chan
-        self.text_chan = self._shared_activity.telepathy_text_chan
-
-        self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].connect_to_signal(
+        self.conn = self.shared_activity.telepathy_conn
+        self.tubes_chan = self.shared_activity.telepathy_tubes_chan
+        self.text_chan = self.shared_activity.telepathy_text_chan
+        self.tube_id = None
+        self.tubes_chan[
+            TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].connect_to_signal(
             'NewTube', self._new_tube_cb)
 
-        if sharer:
-            _logger.debug('This is my activity: making a tube...')
-            id = self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].OfferDBusTube(
-                SERVICE, {})
-        else:
-            _logger.debug('I am joining an activity: waiting for a tube...')
-            self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].ListTubes(
-                reply_handler=self._list_tubes_reply_cb,
-                error_handler=self._list_tubes_error_cb)
-        self._game.set_sharing(True)
-
     def _list_tubes_reply_cb(self, tubes):
-        """ Reply to a list request. """
         for tube_info in tubes:
             self._new_tube_cb(*tube_info)
 
     def _list_tubes_error_cb(self, e):
-        """ Log errors. """
-        _logger.debug('Error: ListTubes() failed: %s' % (e))
+        _logger.error('ListTubes() failed: %s', e)
+
+    def _joined_cb(self, activity):
+        _logger.debug("_joined_cb()")
+        if not self.shared_activity:
+            self._enable_collaboration()
+            return
+
+        self.joined = True
+        _logger.debug('Joined an existing Game session')
+        self._sharing_setup()
+
+        _logger.debug('This is not my activity: waiting for a tube...')
+        self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].ListTubes(
+            reply_handler=self._list_tubes_reply_cb,
+            error_handler=self._list_tubes_error_cb)
+        self._game.set_sharing(True)
+        self._receive_new_game(())
 
     def _new_tube_cb(self, id, initiator, type, service, params, state):
-        """ Create a new tube. """
-        _logger.debug('New tube: ID=%d initator=%d type=%d service=%s \
-params=%r state=%d' % (id, initiator, type, service, params, state))
+        _logger.debug('New tube: ID=%d initiator=%d type=%d service=%s '
+                     'params=%r state=%d', id, initiator, type, service,
+                     params, state)
 
-        if (type == TelepathyGLib.TubeType.DBUS and service == SERVICE):
-            if state == TelepathyGLib.TubeState.LOCAL_PENDING:
-                self.tubes_chan[
-                    TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES].AcceptDBusTube(id)
+        if self.tube_id is not None:
+            # We are already using a tube
+            return
 
-            tube_conn = TubeConnection(
-                self.conn, self.tubes_chan[
-                    TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES], id,
-                group_iface=self.text_chan[
-                    TelepathyGLib.IFACE_CHANNEL_INTERFACE_GROUP])
+        if type != TelepathyGLib.TubeType.DBUS or \
+                service != SERVICE :
+            return
 
-            self.chattube = ChatTube(tube_conn, self.initiating,
-                                     self.event_received_cb)
+        channel = self.tubes_chan[TelepathyGLib.IFACE_CHANNEL_TYPE_TUBES]
+
+        if state == TelepathyGLib.TubeState.LOCAL_PENDING:
+            channel.AcceptDBusTube(id)
+
+        # look for the initiator's D-Bus unique name
+        initiator_dbus_name = None
+        dbus_names = channel.GetDBusNames(id)
+        for handle, name in dbus_names:
+            if handle == initiator:
+                _logger.debug('found initiator D-Bus name: %s', name)
+                initiator_dbus_name = name
+                break
+
+        if initiator_dbus_name is None:
+            _logger.error('Unable to get the D-Bus name of the tube initiator')
+            return
+
+
+
+    def _buddy_joined_cb(self, activity, buddy):
+        _logger.debug('buddy joined with object path: %s', buddy.object_path())
+
+    def _buddy_left_cb(self, activity, buddy):
+        _logger.debug('buddy left with object path: %s', buddy.object_path())
+
+
+
 
     def _setup_dispatch_table(self):
         ''' Associate tokens with commands. '''
@@ -269,16 +304,7 @@ params=%r state=%d' % (id, initiator, type, service, params, state))
             'p': [self._receive_dot_click, 'get a dot click'],
         }
 
-    def event_received_cb(self, event_message):
-        ''' Data from a tube has arrived. '''
-        if len(event_message) == 0:
-            return
-        try:
-            command, payload = event_message.split('|', 2)
-        except ValueError:
-            _logger.debug('Could not split event message %s' % (event_message))
-            return
-        self._processing_methods[command][0](payload)
+
 
     def send_new_game(self):
         ''' Send a new grid to all players '''
@@ -298,31 +324,5 @@ params=%r state=%d' % (id, initiator, type, service, params, state))
         (dot, color) = json_load(payload)
         self._game.remote_button_press(dot, color)
 
-    def send_event(self, entry):
-        """ Send event through the tube. """
-        if hasattr(self, 'chattube') and self.chattube is not None:
-            self.chattube.SendText(entry)
 
 
-class ChatTube(ExportedGObject):
-    """ Class for setting up tube for sharing """
-
-    def __init__(self, tube, is_initiator, stack_received_cb):
-        super(ChatTube, self).__init__(tube, PATH)
-        self.tube = tube
-        self.is_initiator = is_initiator  # Are we sharing or joining activity?
-        self.stack_received_cb = stack_received_cb
-        self.stack = ''
-
-        self.tube.add_signal_receiver(self.send_stack_cb, 'SendText', IFACE,
-                                      path=PATH, sender_keyword='sender')
-
-    def send_stack_cb(self, text, sender=None):
-        if sender == self.tube.get_unique_name():
-            return
-        self.stack = text
-        self.stack_received_cb(text)
-
-    @signal(dbus_interface=IFACE, signature='s')
-    def SendText(self, text):
-        self.stack = text
